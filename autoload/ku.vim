@@ -1,5 +1,5 @@
 " ku - Support to do something
-" Version: 0.1.0
+" Version: 0.1.1
 " Copyright (C) 2008 kana <http://whileimautomaton.net/>
 " License: MIT license  {{{
 "     Permission is hereby granted, free of charge, to any person obtaining
@@ -92,19 +92,21 @@ endif
 " Interface  "{{{1
 function! ku#available_sources()  "{{{2
   " FIXME: more proper condition to check whether the caches are expired.
-  let _ = getftime(split(globpath(&runtimepath, 'autoload/ku/'))[0])
+  let _ = getftime(s:runtime_files('autoload/ku/')[0])
   if len(s:available_sources) == 0 || s:sources_directory_timestamp != _
     let s:sources_directory_timestamp = _
-    let ordinary_sources = map(
-    \     split(globpath(&runtimepath, 'autoload/ku/*.vim'), "\n"),
-    \     'substitute(v:val, ''^.*/\([^/]*\)\.vim$'', ''\1'', "")'
-    \   )
-    let metarw_sources = map(
-    \     split(globpath(&runtimepath, 'autoload/metarw/*.vim'), "\n"),
-    \     'substitute(v:val, ''^.*/\([^/]*\)\.vim$'',''metarw_\1'',"")'
-    \   )
-    let s:available_sources = sort(ordinary_sources + metarw_sources)
+
+    let ordinary_sources = map(s:runtime_files('autoload/ku/*.vim'),
+    \                          'fnamemodify(v:val, ":t:r")')
+
+    let special_sources = []
+    for f in s:runtime_files('autoload/ku/special/*_.vim')
+      let special_sources += ku#special#{fnamemodify(f, ':t:r')}#sources()
+    endfor
+
+    let s:available_sources = sort(ordinary_sources + special_sources)
   endif
+
   return s:available_sources
 endfunction
 
@@ -251,7 +253,7 @@ function! ku#start(source)  "{{{2
   " Start Insert mode.
   call feedkeys('i', 'n')
 
-  call s:api(s:current_source, 'event_handler', 'SourceEnter')
+  call s:api(s:current_source, 'event_handler', 'SourceEnter', s:current_source)
   return s:TRUE
 endfunction
 
@@ -399,7 +401,7 @@ function! s:end()  "{{{2
   endif
   let s:_end_locked_p = s:TRUE
 
-  call s:api(s:current_source, 'event_handler', 'SourceLeave')
+  call s:api(s:current_source, 'event_handler', 'SourceLeave', s:current_source)
   close
 
   let &completeopt = s:completeopt
@@ -570,8 +572,8 @@ function! s:switch_current_source(_)  "{{{2
     return s:FALSE
   endif
 
-  call s:api(_[o], 'event_handler', 'SourceLeave')
-  call s:api(_[n], 'event_handler', 'SourceEnter')
+  call s:api(_[o], 'event_handler', 'SourceLeave', _[o])
+  call s:api(_[n], 'event_handler', 'SourceEnter', _[n])
 
   let s:current_source = _[n]
   return s:TRUE
@@ -918,41 +920,13 @@ endfunction
 
 
 
-" Fake source APIs to treat a metarw scheme as a source  "{{{2
-function! s:metarw_event_handler(scheme, event, ...)
-  if a:event ==# 'BeforeAction'
-    let _ = copy(a:1)
-    let _.word = a:scheme . ':' . _.word
-    return _
-  else
-    return call('ku#default_event_handler', [a:event] + a:000)
-  endif
-endfunction
-
-function! s:metarw_action_table(scheme)
-  return ku#file#action_table()
-endfunction
-
-function! s:metarw_key_table(scheme)
-  return ku#file#key_table()
-endfunction
-
-function! s:metarw_gather_items(scheme, pattern)
-  " a:pattern is not always prefixed with "{scheme}:".
-  let _ = a:scheme . ':' . a:pattern
-  return map(metarw#{a:scheme}#complete(_, _, 0)[0],
-  \          '{"word": matchstr(v:val, ''^'' . a:scheme . '':\zs.*$'')}')
-endfunction
-
-
-
-
 function! s:api(source_name, api_name, ...)  "{{{2
-  let _ = s:metarw_scheme_name(a:source_name)
-  if _ == ''  " an ordinary source
+  let _ = matchstr(a:source_name, '^[a-z]\+\ze-')
+
+  if _ == ''  " normal source
     return call(printf('ku#%s#%s', a:source_name, a:api_name), a:000)
-  else  " a metarw scheme as a source
-    return call(printf('s:metarw_%s', a:api_name), [_] + a:000)
+  else  " special source
+    return call(printf('ku#special#%s#%s', _, a:api_name), a:000)
   endif
 endfunction
 
@@ -1041,18 +1015,18 @@ endfunction
 
 
 
-function! s:metarw_scheme_name(_)  "{{{2
-  return matchstr(a:_, '^metarw_\zs.\+$')
-endfunction
-
-
-
-
 function! s:ni_map(...)  "{{{2
   for _ in ['n', 'i']
     silent! execute _.'map' join(a:000)
   endfor
   return
+endfunction
+
+
+
+
+function! s:runtime_files(glob_pattern)  "{{{2
+  return split(globpath(&runtimepath, a:glob_pattern), '\n')
 endfunction
 
 
