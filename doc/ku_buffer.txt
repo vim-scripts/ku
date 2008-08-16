@@ -37,8 +37,14 @@ Changelog		|ku-buffer-changelog|
 ==============================================================================
 INTRODUCTION					*ku-buffer-introduction*
 
-"buffer" is a source for ku, a Vim plugin (|ku.txt|).  This source gathers all
-buffers but unlisted ones as itmes to be completed.
+*ku-source-buffer* is a source for |ku| to deal with buffers.  You can choose
+one from many buffers and do some action to it.
+
+
+Requirements:
+- Vim 7.1.299 or later
+- |ku| 0.1.0 or later
+  <http://www.vim.org/scripts/script.php?script_id=2337>
 
 
 
@@ -46,16 +52,16 @@ buffers but unlisted ones as itmes to be completed.
 ==============================================================================
 ACTION TABLE					*ku-buffer-action-table*
 
-default						*ku-buffer-aciton-default*
+default						*ku-buffer-action-default*
 			Same as "open".
 
-open						*ku-buffer-aciton-open*
+open						*ku-buffer-action-open*
 			Open the buffer specified by the selected item in the
 			current window.  If the selected item is not completed
 			one, it is treated as the name of a file or
 			a directory, and it will be open by |:edit|.
 
-open!						*ku-buffer-aciton-open!*
+open!						*ku-buffer-action-open!*
 			Like "open", but use :buffer! or :edit! to open the
 			selected item.
 
@@ -72,7 +78,14 @@ wipeout						*ku-buffer-action-wipeout*
 ==============================================================================
 KEY TABLE					*ku-buffer-key-table*
 
-Use |<Plug>(ku-choose-an-action)| to know what keys are available.
+Key		Action ~
+--------	--------
+<C-o>		open		|ku-buffer-action-open|
+D		delete		|ku-buffer-action-delete|
+O		open!		|ku-buffer-action-open!|
+U		unload		|ku-buffer-action-unload|
+W		wipeout		|ku-buffer-action-wipeout|
+o		open		|ku-buffer-action-open|
 
 
 

@@ -1,6 +1,6 @@
 *ku.txt*	Support to do something
 
-Version 0.1.1
+Version 0.1.2
 Copyright (C) 2008 kana <http://whileimautomaton.net/>
 License: MIT license  {{{
     Permission is hereby granted, free of charge, to any person obtaining
@@ -46,8 +46,8 @@ Changelog		|ku-changelog|
 ==============================================================================
 INTRODUCTION					*ku-introduction*
 
-Ku is a Vim plugin to provide the interface to choose many items from a source
-with automatic completion and fuzzy pattern matching.
+*ku* is a Vim plugin to provide the interface to choose many items from
+a source with automatic completion and fuzzy pattern matching.
 
 To start selection, use |ku-commands|.  The commands will open the |ku-window|
 to take your input.  As you input some characters, |ins-completion-menu| will
@@ -59,7 +59,7 @@ You can also write your own sources.  See |ku-sources| for the detail.
 
 
 Requirements:
-- Vim 7.1.299 or later.
+- Vim 7.1.299 or later
 
 
 
@@ -103,18 +103,6 @@ ku#default_key_mappings({override_p})		*ku#default_key_mappings()*
 			<C-j>		<Plug>(ku-next-source)
 			<C-k>		<Plug>(ku-previous-source)
 
-ku#custom_abbreviation({source}, {abbr}, {exp})	*ku#custom_abbreviation()*
-			Define an abbreviation {abbr} which is expanded to
-			{exp} for {source}.  If {exp} is a null string, {abbr}
-			will be deleted.
-
-			{source} is the name of a source or "common".  In the
-			former case, the given {abbr} is available for the
-			given {source}.  In the latter case, the given {abbr}
-			is available for all sources.
-
-			See also |ku-abbreviation-table|.
-
 ku#custom_action({source}, {action}, {function})	*ku#custom_action()*
 			Define a new {action} for items from {source}.
 			{function} is the name of a function which will be
@@ -137,6 +125,27 @@ ku#custom_key({source}, {key}, {action})	*ku#custom_key()*
 			is available for all sources.
 
 			See also |ku-key-table|.
+
+ku#custom_prefix({source}, {prefix}, {text})	*ku#custom_prefix()*
+			Define a {prefix} to be expanded to {text} for
+			{source}.  If {text} is empty string, delete
+			a {prefix} from the prefix table for {source}.
+
+			{source} is the name of a source or "common".  In the
+			former case, the given {prefix} is available for the
+			given {source}.  In the latter case, the given
+			{prefix} is available for all sources.
+
+			See also |ku-prefix-expansion|.
+
+ku#custom_priority({source}, {priority})	*ku#custom_priority()*
+			Set the priority of {source} to {priority}.
+
+			{priority} is an integer and it must be in the range
+			[100, 999], i.e, 100 <= {priority} and {priority} <=
+			999.  The default priority of each source is 500.
+
+			See also |ku-sources-list|.
 
 ku#available_sources()				*ku#available_sources()*
 			Return a list of strings which represents the names of
@@ -164,7 +173,19 @@ In the ku window, the following key mappings are defined:
 
 <Plug>(ku-next-source)				*<Plug>(ku-next-source)*
 <Plug>(ku-previous-source)			*<Plug>(ku-previous-source)*
-			Change the preferred type (ascending / descending).
+			Change the current source to the next one or the
+			previous one.
+						*ku-sources-list*
+			ku has a list of available sources.  The list is
+			sorted by their priorities, then sorted by their
+			names.  Priorities can be configured by
+			|ku#custom_priority()|.
+
+			For example, if
+			- the list == ["buffer", "file", "metarw-git"], and
+			- the current source is "buffer",
+			the next one is "file" and
+			the previous one is "metarw-git".
 
 The default key mappings are defined by |ku#default_key_mappings()|.
 
@@ -197,46 +218,61 @@ case-insensitive way.
 See also |g:ku_common_junk_pattern|.
 
 
-AUTO DIRECTORY COMPLETION			*ku-auto-directory-completion*
+AUTO COMPONENT COMPLETION			*ku-auto-component-completion*
+						*ku-auto-directory-completion*
 
-Whenever "/" is typed, the name of an appropriate directory will be
-automatically inserted.  For example, if the 1st item in the completion menu
-is 'usr/share/man/man1':
+Whenever a special character (*1) is typed, the names of appropriate
+components (*2) will be automatically inserted.  For example, if the 1st item
+in the completion menu is 'usr/share/man/man1', user input will be replaced
+(i.e., completed) as follows when the last '/' is typed:
 
-Input pattern		Replacement ~
+User Input		Replacement ~
 -------------		--------------
 u/			usr/
 usr//			usr/share/
 usr/share//		usr/share/man/
-sh/			usr/share/		(*)
-m/			usr/share/man/		(*)
+sh/			usr/share/		(*3)
+m/			usr/share/man/		(*3)
 
-This feature is derived from bluewind
-<http://cspace.s2.xrea.com/software/bluewind/>.
+This feature is derived from bluewind, command-based application launcher for
+Microsoft Windows <http://cspace.s2.xrea.com/software/bluewind/>.
 
-(*) In these cases, ku completes more than 1 directories.  Because user seems
+(*1) In the above example, '/' is a special character to activate this
+completion.  This character is configurable ith |g:ku_component_separators|.
+If ':' is a special character, 
+
+(*2) In the above example, components are directories.  More precisely,
+components are just strings separated by a special character.  So in the abov
+example, components are directory-like stuffs and they may not be directories.
+
+(*3) In these cases, ku completes more than 1 directories.  Because user seems
 to want to complete several directories rather than just 1 directory.  This
 behavior is not in bluewind, but it's useful.
 
 
-ABBREVIATION					*ku-abbreviation*
+PREFIX EXPANSION				*ku-prefix-expansion*
 
-(planned - this feature is not implemented yet)
-If the head of user input is matched to one of the abbreviations in
-|ku-abbreviation-table|, the head part will be expanded.  For example, if you
+If the head of user input is matched to one of the prefixes in
+|ku-prefix-table|, the matched part will be expanded.  For example, if you
 configure ku with the following setting:
 >
-	call ku#custom_abbreviation('common', '~', '/home/kana')
-	call ku#custom_abbreviation('common', '.vim', '/home/kana/.vim')
+	call ku#custom_prefix('common', '~', $HOME)
+	call ku#custom_prefix('common', '.vim', $HOME.'/.vim')
 <
-User input will be treated as follows:
+User input will be treated as follows
+(in the following examples, $HOME == '/home/kana'):
 
 User input		Treated as ~
 ----------		----------
 ~			/home/kana
 ~/working/meta		/home/kana/working/meta
 .vim/autoload/ku.vim	/home/kana/.vim/autoload/ku.vim
-junk-file~		junk-file~	(not expanded)
+junk-file~		junk-file~	(not expanded, because "~" is not
+					 appeared at the head of user input)
+
+This expansion is not recursive.
+
+See also |ku-prefix-table| and |ku#custom_prefix()|.
 
 
 ------------------------------------------------------------------------------
@@ -485,12 +521,27 @@ User plugin-ku-buffer-initialized		*plugin-ku-buffer-initialize*
 	|ku#default_key_mappings()| will be called.  Otherwise, it will not be
 	called.
 
+g:ku_buffer_name				*g:ku_buffer_name*
+	A string which reporesents the name of the ku buffer.  This value
+	should be unique one which cannot be a name of a usual file to avoid
+	unexpected behavior.
+
+	Default value is '*ku*' or '[ku]'.  The latter is used for Microsoft
+	Windows.  Because '*' cannot be used for buffer name on Microsoft
+	Windows.
+
 g:ku_common_junk_pattern			*g:ku_common_junk_pattern*
 g:ku_{source}_junk_pattern			*g:ku_{source}_junk_pattern*
 	Variables to hold regular expressions to determine "junk" items.  Junk
 	items are listed at the bottom of the completion menu.
 	g:ku_common_junk_pattern is used for items from any sources, while
 	g:ku_{source}_junk_pattern is used for items from a specific {source}.
+
+g:ku_component_separators			*g:ku_component_separators*
+	A string which reporesents special characters to activate
+	|ku-auto-component-completion|.  The default value is '/\:', so if you
+	type '/', '\' or ':', |ku-auto-component-completion| will be
+	activated.
 
 
 
@@ -505,24 +556,9 @@ ku window					*ku-window* *ku-buffer*
 			- Selecting is canceled.
 			- Another window or another tab page becomes active.
 
-abbreviation table				*ku-abbreviation-table*
-			Abbreviation table is a dictionary, where each key is
-			a string that represents an abbreviated form, and each
-			value is a string that represents the expanded form of
-			the corresponding abbreviated form.
-
-			There are 2 abbreviation tables for each source, and
-			above listed ones have higher priority than below
-			listed ones:
-
-			1. custom abbreviation table for a source
-			2. custom abbreviation table for all sources
-
-			Custom abbreviation tables can be configured with
-			|ku#custom_abbreviation()|.  There is no default entry
-			in any abbreviation tables.
-
-			See also |ku-abbreviation|.
+ku session					*ku-session*
+			Ku session is a period of time while the |ku-window|
+			is opened and it is visible.
 
 action table					*ku-action-table*
 			Action table is a dictionary, where each key is the
@@ -559,11 +595,37 @@ key table					*ku-key-table*
 			Custom key tables can be configured with
 			|ku#custom_key()|.
 
+prefix table					*ku-prefix-table*
+			Prefix table is a dictionary, where each key is
+			a string that represents a prefix, and each value is
+			a string that represents the expanded text for the
+			corresponding prefix.
+
+			There are 2 prefix tables for each source, and above
+			listed ones have higher priority than below listed
+			ones:
+
+			1. custom prefix table for a source
+			2. custom prefix table for all sources
+
+			Custom prefix tables can be configured with
+			|ku#custom_prefix()|.  There is no default entry in
+			any prefix tables.
+
+			See also |ku-prefix-expansion|.
+
 
 
 
 ==============================================================================
 BUGS						*ku-bugs*
+
+						*ku-assumptions*
+- Ku assumes that any configuration is not changed during a |ku-session|.  For
+  example, |ku#custom_action()| or other customization must not be done during
+  a ku session.  If you do, ku will not properly work.
+
+- Ku assumes that available sources are not changed during a |ku-session|.
 
 - Many bugs must be around the world.
 
@@ -572,6 +634,26 @@ BUGS						*ku-bugs*
 
 ==============================================================================
 CHANGELOG					*ku-changelog*
+
+0.1.2	2008-08-11T01:56:15+09:00
+	- Fix a bug in |ku-prefix-expansion| - it didn't expand proper prefix
+	  if there are 2 or more prefixes which have the same head part.  For
+	  example, if there are prefixes "ab", "abc", "abcd" and so forth, it
+	  is not possible to predict which prefix will be expanded for user
+	  input "abcd/efgh".  It should expand "abcd", but it may use "abc" or
+	  "ab" instead.
+	- Add |ku-assumptions|.
+	- Change the name of the ku buffer for Microsoft Windows to avoid
+	  unexpected behavior (see |g:ku_buffer_name| for the detail).
+	- Add |g:ku_buffer_name|.
+	- Improve |ku-auto-directory-completion|.  Now the feature is called
+	  as |ku-auto-component-completion|.
+	- Fix a bug in |ku-auto-directory-completion|.  It may raise an error
+	  if user input contains a special character.
+	- Add |ku-prefix-expansion|.
+	- Fix |:KuDoAction| to check whether ku is active or not.
+	- Improve the performance of |ku#available_sources()|.
+	- Add priorities for |ku-sources-list|.
 
 0.1.1	2008-08-10T12:17:09+09:00
 	- Add |ku-special-sources|.

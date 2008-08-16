@@ -1,5 +1,5 @@
 " ku - Support to do something
-" Version: 0.1.1
+" Version: 0.1.2
 " Copyright (C) 2008 kana <http://whileimautomaton.net/>
 " License: MIT license  {{{
 "     Permission is hereby granted, free of charge, to any person obtaining
@@ -36,6 +36,16 @@ endif
 let s:bufnr = s:INVALID_BUFNR
 
 
+" The name of the ku buffer.
+if !exists('g:ku_buffer_name')
+  if has('win16') || has('win32') || has('win64')  " on Microsoft Windows
+    let g:ku_buffer_name = '[ku]'
+  else
+    let g:ku_buffer_name = '*ku*'
+  endif
+endif
+
+
 " The name of the current source given to ku#start() or :Ku.
 let s:INVALID_SOURCE = '*invalid*'
 let s:current_source = s:INVALID_SOURCE
@@ -48,12 +58,31 @@ let s:PROMPT = '>'  " must be a single character.
 let s:INVALID_COL = -3339
 let s:last_col = s:INVALID_COL
 
-let s:auto_directory_completion_done_p = s:FALSE
+let s:automatic_component_completion_done_p = s:FALSE
+  " Special characters to activate automatic component completion.
+if !exists('g:ku_component_separators')
+  let g:ku_component_separators = '/\:'
+endif
 
 
 " To take action on the appropriate item.
 let s:last_completed_items = []
-let s:last_user_input = ''
+
+  " There are 2 versions for user input:
+  "
+  "   raw              Text which user inserts at the ku window.
+  "   prefix-expanded  User input, its prefix is expanded.
+  "                    (see ku#custom_prefix())
+  "
+  " Variables which hold user input are named with the following suffixes:
+  " "_raw" if variables hold raw version,
+  " "_ped" if variables hold prefix-expanded version.
+  "
+  " Note that user input in the ku window is always raw version.  User will
+  " never see prefix-expanded version of user input in the ku window.  This
+  " policy is to avoid recursive prefix expansion whenever user types in the
+  " ku window.
+let s:last_user_input_raw = ''
 
 
 " Values to be restored after the ku window is closed.
@@ -63,15 +92,15 @@ let s:ignorecase = ''
 let s:winrestcmd = ''
 
 
-" User defined action tables, key tables and abbreviation table for sources.
+" User defined action tables, key tables and prefix table for sources.
 if !exists('s:custom_action_tables')
   let s:custom_action_tables = {}  " source -> action-table
 endif
 if !exists('s:custom_key_tables')
   let s:custom_key_tables = {}  " source -> key-table
 endif
-if !exists('s:custom_abbreviation_tables')
-  let s:custom_abbreviation_tables = {}  " source -> abbreviation-table
+if !exists('s:custom_prefix_tables')
+  let s:custom_prefix_tables = {}  " source -> prefix-table
 endif
 
 
@@ -83,6 +112,19 @@ endif
 " There may be g:ku_{source}_junk_pattern.
 
 
+" Priorities table: source -> priority
+if !exists('s:priority_table')
+  let s:priority_table = {}
+endif
+let s:DEFAULT_PRIORITY = 500
+let s:MIN_PRIORITY = 100
+let s:MAX_PRIORITY = 999
+
+
+" Session ID.  A session is a period of time during the ku window is opened.
+let s:session_id = 0
+
+
 
 
 
@@ -91,54 +133,88 @@ endif
 
 " Interface  "{{{1
 function! ku#available_sources()  "{{{2
-  " FIXME: more proper condition to check whether the caches are expired.
-  let _ = getftime(s:runtime_files('autoload/ku/')[0])
-  if len(s:available_sources) == 0 || s:sources_directory_timestamp != _
-    let s:sources_directory_timestamp = _
-
-    let ordinary_sources = map(s:runtime_files('autoload/ku/*.vim'),
-    \                          'fnamemodify(v:val, ":t:r")')
-
-    let special_sources = []
-    for f in s:runtime_files('autoload/ku/special/*_.vim')
-      let special_sources += ku#special#{fnamemodify(f, ':t:r')}#sources()
-    endfor
-
-    let s:available_sources = sort(ordinary_sources + special_sources)
+  " Assumes that s:available_sources will be never changed during a session.
+  if s:ku_active_p() && s:session_id == s:_session_id_source_cache
+    return s:available_sources
   endif
 
+  let _ = s:FALSE
+
+  if s:normal_source_cache_expired_p()
+    call s:update_normal_source_cache()
+    let _ = s:TRUE
+  endif
+
+  if s:special_source_cache_expired_p()
+    call s:update_special_source_cache()
+    let _ = s:TRUE
+  endif
+
+  if s:source_priorities_changed_p
+    let s:source_priorities_changed_p = s:FALSE
+    let _ = s:TRUE
+  endif
+
+  if _
+    let s:available_sources = s:sort_sources(s:available_normal_sources
+    \                                        + s:available_special_sources)
+  endif
+
+  let s:_session_id_source_cache = s:session_id
   return s:available_sources
 endfunction
-
 
 if !exists('s:available_sources')
   let s:available_sources = []  " [source-name, ...]
 endif
-let s:sources_directory_timestamp = 0
+let s:_session_id_source_cache = 0
+let s:source_priorities_changed_p = s:TRUE
+
+
+" cache for normal sources  "{{{3
+let s:available_normal_sources = []  " [source-name, ...]
+let s:last_normal_source_directory_timestamps = []  " [timestamp, ...]
+let s:current_normal_source_directory_timestamps = []  " [timestamp, ...]
+
+function! s:normal_source_cache_expired_p()
+  let s:current_normal_source_directory_timestamps
+  \   = map(s:runtime_files('autoload/ku/'), 'getftime(v:val)')
+
+  return s:current_normal_source_directory_timestamps
+  \      != s:last_normal_source_directory_timestamps
+endfunction
+
+function! s:update_normal_source_cache()
+  let s:available_normal_sources = map(s:runtime_files('autoload/ku/*.vim'),
+  \                                    'fnamemodify(v:val, ":t:r")')
+
+  let s:last_normal_source_directory_timestamps
+  \   = s:current_normal_source_directory_timestamps
+endfunction
+
+
+" cache for special sources  "{{{3
+" FIXME: Implement proper caching.  The following interface is just to hide
+"        the detail of caching.
+let s:available_special_sources = []  " [source-name, ...]
+
+function! s:special_source_cache_expired_p()
+  return s:TRUE
+endfunction
+
+function! s:update_special_source_cache()
+  let s:available_special_sources = []
+  for f in s:runtime_files('autoload/ku/special/*_.vim')
+    let s:available_special_sources
+    \   += ku#special#{fnamemodify(f, ':t:r')}#sources()
+  endfor
+endfunction
 
 
 
 
 function! ku#command_complete(arglead, cmdline, cursorpos)  "{{{2
   return join(ku#available_sources(), "\n")
-endfunction
-
-
-
-
-function! ku#custom_abbreviation(source, abbr_form, expanded_form)  "{{{2
-  if !has_key(s:custom_abbreviation_tables, a:source)
-    let s:custom_abbreviation_tables[a:source] = {}
-  endif
-  let _ = s:custom_abbreviation_tables[a:source]
-
-  if a:expanded_form != ''
-    let _[a:abbr_form] = a:expanded_form
-  else
-    if has_key(_, a:abbr_form)
-      call remove(_, a:abbr_form)
-    endif
-  endif
 endfunction
 
 
@@ -161,6 +237,42 @@ function! ku#custom_key(source, key, action)  "{{{2
   endif
 
   let s:custom_key_tables[a:source][a:key] = a:action
+endfunction
+
+
+
+
+function! ku#custom_prefix(source, prefix, text)  "{{{2
+  if !has_key(s:custom_prefix_tables, a:source)
+    let s:custom_prefix_tables[a:source] = {}
+  endif
+  let _ = s:custom_prefix_tables[a:source]
+
+  if a:text != ''
+    let _[a:prefix] = a:text
+  else
+    if has_key(_, a:prefix)
+      call remove(_, a:prefix)
+    endif
+  endif
+endfunction
+
+
+
+
+function! ku#custom_priority(source, priority)  "{{{2
+  if type(a:priority) != type(0)
+    echoerr 'priority must be integer, but got:' string(a:priority)
+    return
+  endif
+  if a:priority < s:MIN_PRIORITY || s:MAX_PRIORITY < a:priority
+    echoerr 'priority is out of the range:' string(a:priority)
+    return
+  endif
+
+  let s:priority_table[a:source] = a:priority
+
+  let s:source_priorities_changed_p = s:TRUE
 endfunction
 
 
@@ -196,6 +308,11 @@ endfunction
 
 
 function! ku#do_action(name)  "{{{2
+  if !s:ku_active_p()
+    echoerr 'ku is not active'
+    return s:FALSE
+  endif
+
   return s:do(a:name)
 endfunction
 
@@ -216,6 +333,7 @@ function! ku#start(source)  "{{{2
   endif
 
   let s:current_source = a:source
+  let s:session_id = localtime()
 
   " Save some values to restore the original state.
   let s:completeopt = &completeopt
@@ -253,7 +371,7 @@ function! ku#start(source)  "{{{2
   " Start Insert mode.
   call feedkeys('i', 'n')
 
-  call s:api(s:current_source, 'event_handler', 'SourceEnter', s:current_source)
+  call s:api(s:current_source, 'event_handler', 'SourceEnter',s:current_source)
   return s:TRUE
 endfunction
 
@@ -275,9 +393,10 @@ function! ku#_omnifunc(findstart, base)  "{{{2
     let s:last_completed_items = []
     return 0
   else
-    let pattern = (s:contains_the_prompt_p(a:base)
-    \              ? a:base[len(s:PROMPT):]
-    \              : a:base)
+    let pattern = s:expand_prefix(s:contains_the_prompt_p(a:base)
+    \                             ? a:base[len(s:PROMPT):]
+    \                             : a:base)
+
     let asis_regexp = s:make_asis_regexp(pattern)
     let word_regexp = s:make_word_regexp(pattern)
     let skip_regexp = s:make_skip_regexp(pattern)
@@ -347,33 +466,34 @@ endfunction
 
 
 function! s:do(action_name)  "{{{2
-  let current_user_input = getline(2)
-  if current_user_input !=# s:last_user_input
-    " current_user_input seems to be inserted by completion.
+  let current_user_input_raw = getline(2)
+  if current_user_input_raw !=# s:last_user_input_raw
+    " current_user_input_raw seems to be inserted by completion.
     for _ in s:last_completed_items
-      if current_user_input ==# _.word
+      if current_user_input_raw ==# _.word
         let item = _
         break
       endif
     endfor
     if !exists('item')
       echoerr 'Internal error: No match found in s:last_completed_items'
-      echoerr 'current_user_input' string(current_user_input)
-      echoerr 's:last_user_input' string(s:last_user_input)
+      echoerr 'current_user_input_raw' string(current_user_input_raw)
+      echoerr 's:last_user_input_raw' string(s:last_user_input_raw)
       throw 'ku:e1'
     endif
   else
-    " current_user_input seems NOT to be inserted by completion, but ...
+    " current_user_input_raw seems NOT to be inserted by completion, but ...
     if 0 < len(s:last_completed_items)
       " there are 1 or more items -- user seems to take action on the 1st one.
       let item = s:last_completed_items[0]
     else
-      " there is no item -- user seems to take action on current_user_input.
-      if s:contains_the_prompt_p(current_user_input)
+      " there's no item -- user seems to take action on current_user_input_raw.
+      if s:contains_the_prompt_p(current_user_input_raw)
         " remove the prompt.
-        let current_user_input = current_user_input[len(s:PROMPT):]
+        let current_user_input_raw = current_user_input_raw[len(s:PROMPT):]
       endif
-      let item = {'word': current_user_input, '_ku_completed_p': s:FALSE}
+      let item = {'word': s:expand_prefix(current_user_input_raw),
+      \           '_ku_completed_p': s:FALSE}
     endif
   endif
 
@@ -401,7 +521,7 @@ function! s:end()  "{{{2
   endif
   let s:_end_locked_p = s:TRUE
 
-  call s:api(s:current_source, 'event_handler', 'SourceLeave', s:current_source)
+  call s:api(s:current_source, 'event_handler', 'SourceLeave',s:current_source)
   close
 
   let &completeopt = s:completeopt
@@ -424,7 +544,7 @@ function! s:initialize_ku_buffer()  "{{{2
   setlocal nobuflisted
   setlocal noswapfile
   setlocal omnifunc=ku#_omnifunc
-  silent file `='*ku*'`
+  silent file `=g:ku_buffer_name`
 
   " Autocommands.
   autocmd InsertEnter <buffer>  call feedkeys(s:on_InsertEnter(), 'n')
@@ -510,34 +630,40 @@ function! s:on_CursorMovedI()  "{{{2
     let keys = repeat("\<Right>", len(s:PROMPT) - col('.') + 1)
   elseif len(line) < col('.') && col('.') != s:last_col
     " New character is inserted.  Let's complete automatically.
-    " FIXME: path separator assumption
-    if (!s:auto_directory_completion_done_p)
-    \  && line[-1:] == '/'
+    if (!s:automatic_component_completion_done_p)
+    \  && 0 <= stridx(g:ku_component_separators, line[-1:])
     \  && len(s:PROMPT) + 2 <= len(line)
-      " The last inserted character is not inserted by automatic directory
-      " completion, it is a '/', and it seems not to be the 1st '/' of the
-      " root directory.
-      let text = s:text_by_auto_directory_completion(line)
+      " (1) The last inserted character is not inserted by automatic component
+      "     completion.
+      " (2) It is a special character which is one of
+      "     g:ku_component_separators.
+      " (3) It seems not to be the 1st one in line.
+      "
+      " The (3) is necessary to input a special character as the 1st character
+      " in line.  For example, without this condition, user cannot input the
+      " 1st '/' of an absolute path like '/usr/local/bin' if '/' is a special
+      " character.
+      let text = s:text_by_automatic_component_completion(line)
       if text != ''
         call setline('.', text)
-          " The last slash must be inserted in this way to forcedly show the
-          " completion menu.
-        let keys = "\<End>/"
-        let s:auto_directory_completion_done_p = s:TRUE
+          " The last special character must be inserted in this way to
+          " forcedly show the completion menu.
+        let keys = "\<End>" . line[-1:]
+        let s:automatic_component_completion_done_p = s:TRUE
       else
         let keys = s:KEYS_TO_START_COMPLETION
-        let s:auto_directory_completion_done_p = s:FALSE
+        let s:automatic_component_completion_done_p = s:FALSE
       endif
     else
       let keys = s:KEYS_TO_START_COMPLETION
-      let s:auto_directory_completion_done_p = s:FALSE
+      let s:automatic_component_completion_done_p = s:FALSE
     endif
   else
     let keys = ''
   endif
 
   let s:last_col = col('.')
-  let s:last_user_input = line
+  let s:last_user_input_raw = line
   return (c0 != c1 ? "\<Right>" : '') . keys
 endfunction
 
@@ -546,8 +672,8 @@ endfunction
 
 function! s:on_InsertEnter()  "{{{2
   let s:last_col = s:INVALID_COL
-  let s:last_user_input = ''
-  let s:auto_directory_completion_done_p = s:FALSE
+  let s:last_user_input_raw = ''
+  let s:automatic_component_completion_done_p = s:FALSE
   return s:on_CursorMovedI()
 endfunction
 
@@ -599,42 +725,53 @@ function! s:contains_the_prompt_p(s)  "{{{3
 endfunction
 
 
-function! s:text_by_auto_directory_completion(line)  "{{{3
-  " Note that a:line always ends with '/', because this function is always
-  " called by typing '/'.  So there are at least 2 components in a:line.
-  " FIXME: path separator assumption.
-  let line_components = split(a:line[len(s:PROMPT):], '/', s:TRUE)
+function! s:text_by_automatic_component_completion(line)  "{{{3
+  " Note that a:line always ends with a special character which is one of
+  " g:ku_component_separators,  because this function is always called by
+  " typing a special character.  So there are at least 2 components in a:line.
+  let SEP = a:line[-1:]  " string[-1] is always empty - see :help expr-[]
+
+  let user_input_raw = a:line[len(s:PROMPT):]
+  let [user_input_ped, prefix, text] = s:expand_prefix3(user_input_raw)
+  let prefix_expanded_p = user_input_raw !=# user_input_ped
+  let line_components = split(user_input_ped, SEP, s:TRUE)
 
   " Find an item which has the same components but the last 2 ones of
   " line_components.  Because line_components[-1] is always empty and
-  " line_components[-2] is almost imperfect directory name.
+  " line_components[-2] is almost imperfect name of a component.
   "
   " Note that line_components[-2] is already used to filter the completed
   " items and it is used to select what components should be completed.
   "
   " Example:
-  " (a) If a:line ==# 'usr/share/m/',
-  "     line_components == ['usr', 'share', 'm', ''].
-  "     So the 1st item which is prefixed with 'usr/share/' is selected and it
-  "     is used for this automatic directory completion.  If
+  "
+  " (a) a:line ==# 'usr/share/m/',
+  "     line_components == ['usr', 'share', 'm', '']
+  "
+  "     The 1st item which is prefixed with 'usr/share/' is selected and it is
+  "     used for this automatic component completion.  If
   "     'usr/share/man/man1/' is found in this way, the completed text will be
   "     'usr/share/man'.
-  " (b) If a:line ==# 'u/',
-  "     line_components == ['u', ''].
-  "     So the 1st item is alaways selected for this automatic directory
+  "
+  " (b) a:line ==# 'u/'
+  "     line_components == ['u', '']
+  "
+  "     The 1st item is alaways selected for this automatic component
   "     completion.  If 'usr/share/man/man1/' is found in this way, the
   "     completion text will be 'usr'.
-  " (c) If a:line ==# 'm/',
-  "     line_components == ['m', ''].
-  "     So the 1st item is alaways selected for this automatic directory
+  "
+  " (c) a:line ==# 'm/'
+  "     line_components == ['m', '']
+  "
+  "     The 1st item is alaways selected for this automatic component
   "     completion.  If 'usr/share/man/man1/' is found in this way, the
-  "     completion text will be 'usr/share/man/', because user seems to want
-  "     to complete till the component which matches to 'm'.
-  for item in ku#_omnifunc(s:FALSE, a:line[:-2])  " without the last '/'
-    let item_components = split(item.word, '/', s:TRUE)
+  "     completion text will be 'usr/share/man', because user seems to want to
+  "     complete till the component which matches to 'm'.
+  for item in ku#_omnifunc(s:FALSE, a:line[:-2])  " without the last SEP
+    let item_components = split(item.word, SEP, s:TRUE)
 
     if len(line_components) < 2
-      echoerr 'Assumption is failed in auto directory completion'
+      echoerr 'Assumption is failed in auto component completion'
       throw 'ku:e2'
     elseif len(line_components) == 2
       " OK - the case (b)
@@ -655,12 +792,17 @@ function! s:text_by_auto_directory_completion(line)  "{{{3
       " for the case (c), find the index of a component to be completed.
     let _ = len(line_components) - 2
     for i in range(len(line_components) - 2, len(item_components) - 1)
-      if item_components[i] =~? line_components[-2]  " FIXME: use skip pattern
+      if item_components[i] =~? s:make_skip_regexp(line_components[-2])
         let _ = i
         break
       endif
     endfor
-    return join(item_components[:_], '/')
+
+    let result = join(item_components[:_], SEP)
+    if prefix_expanded_p && stridx(result, text) == 0
+      let result = prefix . result[len(text):]
+    endif
+    return result
   endfor
   return ''
 endfunction
@@ -892,30 +1034,46 @@ endfunction
 
 
 
-" Abbreviation table  "{{{2
-function! s:abbreviation_table_for(source)  "{{{3
-  let ABBREVIATION_TABLE = {}
-  for _ in [s:custom_abbreviation_table('common'),
-  \         s:custom_abbreviation_table(s:current_source)]
-    call extend(ABBREVIATION_TABLE, _)
+" Prefix table  "{{{2
+function! s:prefix_table_for(source)  "{{{3
+  let PREFIX_TABLE = {}
+  for _ in [s:custom_prefix_table('common'),
+  \         s:custom_prefix_table(s:current_source)]
+    call extend(PREFIX_TABLE, _)
   endfor
-  return ABBREVIATION_TABLE
+  return PREFIX_TABLE
 endfunction
 
 
-function! s:custom_abbreviation_table(source)  "{{{3
-  return get(s:custom_abbreviation_tables, a:source, {})
+function! s:custom_prefix_table(source)  "{{{3
+  return get(s:custom_prefix_tables, a:source, {})
 endfunction
 
 
-function! s:expand_abbreviation(s)  "{{{3
-  for [abbr, expnd] in items(s:abbreviation_table_for(s:current_source))
-    if a:s[:len(abbr) - 1] ==# abbr
-      return expnd . a:s[len(abbr):]
+function! s:expand_prefix(user_input_raw)  "{{{3
+  return s:expand_prefix3(a:user_input_raw)[0]
+endfunction
+
+
+function! s:expand_prefix3(user_input_raw)  "{{{3
+  if s:session_id != s:_session_id_expand_prefix3
+  \  || s:current_source != s:_current_source_expand_prefix3
+    let _ = s:prefix_table_for(s:current_source)
+    let s:cached_prefix_items = map(reverse(sort(keys(_))), '[v:val,_[v:val]]')
+  endif
+
+  for [prefix, text] in s:cached_prefix_items
+    if a:user_input_raw[:len(prefix) - 1] ==# prefix
+      return [text . a:user_input_raw[len(prefix):], prefix, text]
     endif
   endfor
-  return a:s
+
+  return [a:user_input_raw, '', '']
 endfunction
+
+let s:cached_prefix_items = []
+let s:_session_id_expand_prefix3 = 0
+let s:_current_source_expand_prefix3 = s:INVALID_SOURCE
 
 
 
@@ -1027,6 +1185,17 @@ endfunction
 
 function! s:runtime_files(glob_pattern)  "{{{2
   return split(globpath(&runtimepath, a:glob_pattern), '\n')
+endfunction
+
+
+
+
+function! s:sort_sources(_)  "{{{2
+  let _ = a:_
+  let _ = map(_, 'get(s:priority_table, v:val, s:DEFAULT_PRIORITY) . v:val')
+  let _ = sort(_)
+  let _ = map(_, 'v:val[3:]')  " Assumption: priority is 3-digit integer.
+  return _
 endfunction
 
 
