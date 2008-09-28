@@ -1,5 +1,5 @@
 " ku - Support to do something
-" Version: 0.1.2
+" Version: 0.1.3
 " Copyright (C) 2008 kana <http://whileimautomaton.net/>
 " License: MIT license  {{{
 "     Permission is hereby granted, free of charge, to any person obtaining
@@ -125,6 +125,15 @@ let s:MAX_PRIORITY = 999
 let s:session_id = 0
 
 
+" For s:recall_input_history()
+let s:current_hisotry_index = -1
+
+
+" For ku#restart()
+let s:last_used_source = s:INVALID_SOURCE
+let s:last_used_input_pattern = ''
+
+
 
 
 
@@ -220,12 +229,36 @@ endfunction
 
 
 
-function! ku#custom_action(source, action, function)  "{{{2
+function! ku#custom_action(source, action, ...)  "{{{2
   if !has_key(s:custom_action_tables, a:source)
     let s:custom_action_tables[a:source] = {}
   endif
 
+  if a:0 == 1
+    call call('s:ku_custom_action_3', [a:source, a:action] + a:000)
+  elseif a:0 == 2
+    call call('s:ku_custom_action_4', [a:source, a:action] + a:000)
+  else
+    echoerr printf('Invalid arguments: %s', string([a:source,a:action]+a:000))
+  endif
+endfunction
+
+
+function! s:ku_custom_action_3(source, action, function)  "{{{3
   let s:custom_action_tables[a:source][a:action] = a:function
+endfunction
+
+
+function! s:ku_custom_action_4(source, action, source2, action2)  "{{{3
+  let action_table = s:api(a:source2, 'action_table')
+  let function2 = get(action_table, a:action2, 0)
+  if function2 is 0
+    echoerr printf('No such action for %s/%s: %s',
+    \              a:type, a:source2, string(a:action2))
+    return
+  endif
+
+  let s:custom_action_tables[a:source][a:action] = function2
 endfunction
 
 
@@ -301,6 +334,8 @@ function! ku#default_key_mappings(override_p)  "{{{2
   call s:ni_map(_, '<buffer> <C-i>', '<Plug>(ku-choose-an-action)')
   call s:ni_map(_, '<buffer> <C-j>', '<Plug>(ku-next-source)')
   call s:ni_map(_, '<buffer> <C-k>', '<Plug>(ku-previous-source)')
+  call s:ni_map(_, '<buffer> <Esc>j', '<Plug>(ku-newer-history)')
+  call s:ni_map(_, '<buffer> <Esc>k', '<Plug>(ku-older-history)')
   return
 endfunction
 
@@ -319,7 +354,21 @@ endfunction
 
 
 
-function! ku#start(source)  "{{{2
+function! ku#input_history()  "{{{2
+  return s:history_list()
+endfunction
+
+
+
+
+function! ku#restart()  "{{{2
+  return ku#start(s:last_used_source, s:last_used_input_pattern)
+endfunction
+
+
+
+
+function! ku#start(source, ...)  "{{{2
   if !s:available_source_p(a:source)
     echoerr 'ku: Not a valid source name:' string(a:source)
     return s:FALSE
@@ -334,6 +383,7 @@ function! ku#start(source)  "{{{2
 
   let s:current_source = a:source
   let s:session_id = localtime()
+  let s:current_hisotry_index = -1
 
   " Save some values to restore the original state.
   let s:completeopt = &completeopt
@@ -365,13 +415,13 @@ function! ku#start(source)  "{{{2
 
   " Reset the content of the ku buffer
   silent % delete _
-  call append(1, '')
+  call append(1, (a:0 == 0 ? '' : a:1))
   normal! 2G
 
   " Start Insert mode.
-  call feedkeys('i', 'n')
+  call feedkeys('A', 'n')
 
-  call s:api(s:current_source, 'event_handler', 'SourceEnter',s:current_source)
+  call s:api(s:current_source, 'event_handler', 'SourceEnter')
   return s:TRUE
 endfunction
 
@@ -393,9 +443,7 @@ function! ku#_omnifunc(findstart, base)  "{{{2
     let s:last_completed_items = []
     return 0
   else
-    let pattern = s:expand_prefix(s:contains_the_prompt_p(a:base)
-    \                             ? a:base[len(s:PROMPT):]
-    \                             : a:base)
+    let pattern = s:expand_prefix(s:remove_prompt(a:base))
 
     let asis_regexp = s:make_asis_regexp(pattern)
     let word_regexp = s:make_word_regexp(pattern)
@@ -406,7 +454,8 @@ function! ku#_omnifunc(findstart, base)  "{{{2
     for _ in s:last_completed_items
       let _['_ku_completed_p'] = s:TRUE
       let _['_ku_source'] = s:current_source
-      let _['_ku_sort_priority'] = [
+      let _['_ku_sort_priorities'] = [
+      \     has_key(_, '_ku_sort_priority') ? _['_ku_sort_priority'] : 0,
       \     _.word =~# g:ku_common_junk_pattern,
       \     (exists('g:ku_{s:current_source}_junk_pattern')
       \      && _.word =~# g:ku_{s:current_source}_junk_pattern),
@@ -430,7 +479,7 @@ function! ku#_omnifunc(findstart, base)  "{{{2
       " doesn't want such items to be completed.
       " BUGS: Don't forget to update the index for the matched position of
       "       case-insensitive skip_regexp.
-    call filter(s:last_completed_items, '0 <= v:val._ku_sort_priority[-3]')
+    call filter(s:last_completed_items, '0 <= v:val._ku_sort_priorities[-3]')
     call sort(s:last_completed_items, function('s:_compare_items'))
     if exists('g:ku_debug_p') && g:ku_debug_p
       echomsg 'base' string(a:base)
@@ -438,7 +487,7 @@ function! ku#_omnifunc(findstart, base)  "{{{2
       echomsg 'word' string(word_regexp)
       echomsg 'skip' string(skip_regexp)
       for _ in s:last_completed_items
-        echomsg string(_._ku_sort_priority)
+        echomsg string(_._ku_sort_priorities)
       endfor
     endif
     return s:last_completed_items
@@ -447,7 +496,7 @@ endfunction
 
 
 function! s:_compare_items(a, b)
-  return s:_compare_lists(a:a._ku_sort_priority, a:b._ku_sort_priority)
+  return s:_compare_lists(a:a._ku_sort_priorities, a:b._ku_sort_priorities)
 endfunction
 
 function! s:_compare_lists(a, b)
@@ -488,17 +537,18 @@ function! s:do(action_name)  "{{{2
       let item = s:last_completed_items[0]
     else
       " there's no item -- user seems to take action on current_user_input_raw.
-      if s:contains_the_prompt_p(current_user_input_raw)
-        " remove the prompt.
-        let current_user_input_raw = current_user_input_raw[len(s:PROMPT):]
-      endif
-      let item = {'word': s:expand_prefix(current_user_input_raw),
+      let item = {'word':
+      \             s:expand_prefix(s:remove_prompt(current_user_input_raw)),
       \           '_ku_completed_p': s:FALSE}
     endif
   endif
 
+  call s:history_add(s:remove_prompt(s:last_user_input_raw))
+  let s:last_used_source = s:current_source
+  let s:last_used_input_pattern = s:last_user_input_raw
+
   if a:action_name == ''
-    let action = s:choose_action()
+    let action = s:choose_action(item)
   else
     let action = a:action_name
   endif
@@ -521,7 +571,7 @@ function! s:end()  "{{{2
   endif
   let s:_end_locked_p = s:TRUE
 
-  call s:api(s:current_source, 'event_handler', 'SourceLeave',s:current_source)
+  call s:api(s:current_source, 'event_handler', 'SourceLeave')
   close
 
   let &completeopt = s:completeopt
@@ -564,6 +614,10 @@ function! s:initialize_ku_buffer()  "{{{2
   \        :<C-u>call <SID>switch_current_source(1)<Return>
   nnoremap <buffer> <silent> <Plug>(ku-previous-source)
   \        :<C-u>call <SID>switch_current_source(-1)<Return>
+  nnoremap <buffer> <silent> <Plug>(ku-newer-history)
+  \        :<C-u>call <SID>recall_input_history(-1)<Return>
+  nnoremap <buffer> <silent> <Plug>(ku-older-history)
+  \        :<C-u>call <SID>recall_input_history(1)<Return>
 
   nnoremap <buffer> <Plug>(ku-%-enter-insert-mode)  a
   inoremap <buffer> <Plug>(ku-%-leave-insert-mode)  <Esc>
@@ -592,6 +646,16 @@ function! s:initialize_ku_buffer()  "{{{2
   \    <Plug>(ku-%-cancel-completion)
   \<Plug>(ku-%-leave-insert-mode)
   \<Plug>(ku-previous-source)
+  \<Plug>(ku-%-enter-insert-mode)
+  imap <buffer> <silent> <Plug>(ku-newer-history)
+  \    <Plug>(ku-%-cancel-completion)
+  \<Plug>(ku-%-leave-insert-mode)
+  \<Plug>(ku-newer-history)
+  \<Plug>(ku-%-enter-insert-mode)
+  imap <buffer> <silent> <Plug>(ku-older-history)
+  \    <Plug>(ku-%-cancel-completion)
+  \<Plug>(ku-%-leave-insert-mode)
+  \<Plug>(ku-older-history)
   \<Plug>(ku-%-enter-insert-mode)
 
   inoremap <buffer> <expr> <BS>  pumvisible() ? '<C-e><BS>' : '<BS>'
@@ -680,6 +744,36 @@ endfunction
 
 
 
+function! s:recall_input_history(delta)  "{{{2
+  let o = s:current_hisotry_index
+  let n = o + a:delta
+  if n < -1
+    let n = -1
+  endif
+  if len(ku#input_history()) <= n
+    let n = len(ku#input_history()) - 1
+  endif
+
+  if o == -1
+    let s:unsaved_input_pattern = getline('.')
+  endif
+  if n == -1
+    let _ = s:unsaved_input_pattern
+  else
+    let _ = ku#input_history()[n]
+  endif
+
+  let s:current_hisotry_index = n
+  call setline('.', _)
+  call feedkeys("\<End>", 'n')
+  return
+endfunction
+
+" s:unsaved_input_pattern = ''
+
+
+
+
 function! s:switch_current_source(_)  "{{{2
   " FIXME: Update the line to indicate the current source even if this
   "        function is called in any mode other than Insert mode.
@@ -698,8 +792,8 @@ function! s:switch_current_source(_)  "{{{2
     return s:FALSE
   endif
 
-  call s:api(_[o], 'event_handler', 'SourceLeave', _[o])
-  call s:api(_[n], 'event_handler', 'SourceEnter', _[n])
+  call s:api(_[o], 'event_handler', 'SourceLeave')
+  call s:api(_[n], 'event_handler', 'SourceEnter')
 
   let s:current_source = _[n]
   return s:TRUE
@@ -713,6 +807,15 @@ endfunction
 
 
 " Misc.  "{{{1
+" Autocommands  "{{{2
+
+augroup plugin-ku
+  autocmd!
+  autocmd VimLeave *  call s:history_save()
+augroup END
+
+
+
 " Automatic completion  "{{{2
 function! s:complete_the_prompt()  "{{{3
   call setline('.', s:PROMPT . getline('.'))
@@ -725,13 +828,18 @@ function! s:contains_the_prompt_p(s)  "{{{3
 endfunction
 
 
+function! s:remove_prompt(s)  "{{{3
+  return s:contains_the_prompt_p(a:s) ? a:s[len(s:PROMPT):] : a:s
+endfunction
+
+
 function! s:text_by_automatic_component_completion(line)  "{{{3
   " Note that a:line always ends with a special character which is one of
   " g:ku_component_separators,  because this function is always called by
   " typing a special character.  So there are at least 2 components in a:line.
   let SEP = a:line[-1:]  " string[-1] is always empty - see :help expr-[]
 
-  let user_input_raw = a:line[len(s:PROMPT):]
+  let user_input_raw = s:remove_prompt(a:line)
   let [user_input_ped, prefix, text] = s:expand_prefix3(user_input_raw)
   let prefix_expanded_p = user_input_raw !=# user_input_ped
   let line_components = split(user_input_ped, SEP, s:TRUE)
@@ -811,7 +919,7 @@ endfunction
 
 
 " Action-related stuffs  "{{{2
-function! s:choose_action()  "{{{3
+function! s:choose_action(item)  "{{{3
   " Composite the 4 key tables on s:current_source for further work.
   let KEY_TABLE = {}
   for _ in [s:default_key_table(),
@@ -821,6 +929,8 @@ function! s:choose_action()  "{{{3
     call extend(KEY_TABLE, _)
   endfor
   call filter(KEY_TABLE, 'v:val !=# "nop"')
+
+  echo printf('Item: %s (%s)', a:item.word, s:current_source)
 
   " List keys and their actions.
   " FIXME: listing like ls - the width of each column is varied.
@@ -1078,13 +1188,68 @@ let s:_current_source_expand_prefix3 = s:INVALID_SOURCE
 
 
 
+" History of inputted patterns  "{{{2
+" Variables / Constants  "{{{3
+
+" s:inputted_patterns = []  " the first item is the newest inputted pattern.
+let s:HISTORY_SIZE = 100
+let s:HISTORY_FILE = 'info/ku/history'
+
+
+function! s:history_add(new_input_pattern)  "{{{3
+  call insert(s:inputted_patterns, a:new_input_pattern, 0)
+
+  if s:HISTORY_SIZE < len(s:inputted_patterns)
+    call remove(s:inputted_patterns, s:HISTORY_SIZE+1, -1)
+  endif
+endfunction
+
+
+function! s:history_file()  "{{{3
+  " FIXME: path separator assumption
+  return printf('%s/%s', split(&runtimepath, ',')[0], s:HISTORY_FILE)
+endfunction
+
+
+function! s:history_list()  "{{{3
+  return s:inputted_patterns
+endfunction
+
+
+function! s:history_load()  "{{{3
+  if filereadable(s:history_file())
+    let s:inputted_patterns = readfile(s:history_file(), '', s:HISTORY_SIZE)
+  else
+    let s:inputted_patterns = []
+  endif
+endfunction
+
+if !exists('s:inputted_patterns')
+  call s:history_load()
+endif
+
+
+function! s:history_save()  "{{{3
+  let file = s:history_file()
+  let directory = fnamemodify(file, ':h')
+  if !isdirectory(directory)
+    call mkdir(directory, 'p')
+  endif
+
+  call writefile(s:history_list(), file)
+endfunction
+
+
+
+
 function! s:api(source_name, api_name, ...)  "{{{2
   let _ = matchstr(a:source_name, '^[a-z]\+\ze-')
 
   if _ == ''  " normal source
     return call(printf('ku#%s#%s', a:source_name, a:api_name), a:000)
   else  " special source
-    return call(printf('ku#special#%s#%s', _, a:api_name), a:000)
+    return call(printf('ku#special#%s#%s', _, a:api_name),
+    \           [a:source_name] + a:000)
   endif
 endfunction
 
