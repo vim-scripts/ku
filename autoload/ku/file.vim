@@ -1,5 +1,5 @@
 " ku source: file
-" Version: 0.0.0
+" Version: 0.0.1
 " Copyright (C) 2008 kana <http://whileimautomaton.net/>
 " License: MIT license  {{{
 "     Permission is hereby granted, free of charge, to any person obtaining
@@ -78,12 +78,18 @@ function! ku#file#gather_items(pattern)  "{{{2
   endif
 
   let i = strridx(a:pattern, '/')
+  let components = split(a:pattern, '/', !0)
+  let root_directory_pattern_p = i == 0
+  let user_seems_want_dotfiles_p = components[-1][:0] == '.'
+  let wildcard = (user_seems_want_dotfiles_p
+  \               ? ('{*,.*' . (root_directory_pattern_p ? '' : ',..') . '}')
+  \               : '*')
   if i < 0  " no path separator
-    let glob_pattern = '*'
-  elseif i == 0  " only one path separator which means the root directory
-    let glob_pattern = '/*'
+    let glob_pattern = wildcard
+  elseif root_directory_pattern_p
+    let glob_pattern = '/' . wildcard
   else  " more than one path separators
-    let glob_pattern = a:pattern[:i] . '*'
+    let glob_pattern = join(components[:-2], '/') . '/' . wildcard
   endif
 
   let _ = []
@@ -96,6 +102,13 @@ function! ku#file#gather_items(pattern)  "{{{2
 
   let s:cached_items[cache_key] = _
   return _
+endfunction
+
+
+
+
+function! ku#file#acc_valid_p(item, sep)  "{{{2
+  return a:sep ==# '/' && isdirectory(a:item.word)
 endfunction
 
 

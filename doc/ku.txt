@@ -1,6 +1,6 @@
 *ku.txt*	Support to do something
 
-Version 0.1.3
+Version 0.1.4
 Script ID: 2337
 Copyright (C) 2008 kana <http://whileimautomaton.net/>
 License: MIT license  {{{
@@ -119,6 +119,9 @@ ku#custom_action({source}, {action}, {source2}, {action2})
 
 			In the former case, {function} is the name of
 			a function which will be called as {action}.
+							*ku-disable-action*
+			{function} can be "nop", if so, the corresponding
+			action will be disabled.
 
 			In the latter case, the function corresponding to the
 			{action2} for items from {source2} will be called as
@@ -523,6 +526,16 @@ ku#{source}#gather_items({pattern})		*ku#{source}#gather_items()*
 				Normally true.  If the item is not completed
 				one, it is set to false.
 
+ku#{source}#acc_valid_p({item}, {sep})		*ku#{source}#acc_valid_p()*
+			Return true if {item} can be used for ACC,
+			|ku-auto-component-completion|, or return false
+			otherwise.
+
+			{sep} is the separator inputted by user.
+
+			This function is optional; if it is not defined, all
+			{item}s can be used for ACC.
+
 
 						*ku-special-sources*
 Normally, 1 source script provides 1 source, and the basename of a source
@@ -566,14 +579,14 @@ ku#special#{source}_#sources()		      *ku#special#{source}_#sources()*
 ==============================================================================
 CUSTOMIZING					*ku-customizing*
 
-User plugin-ku-buffer-initialized		*plugin-ku-buffer-initialize*
+FileType ku					*filetype-ku*
 	This event is published whenever the ku buffer is created then being
 	initialized.  Use this event to do your initialization, for example,
 	customize key mappings for the ku buffer.
 
-	Note that if there is no |:autocmd| for this event,
-	|ku#default_key_mappings()| will be called.  Otherwise, it will not be
-	called.
+	Note that if there is no |:autocmd| nor filetype plugin for this
+	event, |ku#default_key_mappings()| will be called.  Otherwise, it will
+	not be called.
 
 g:ku_buffer_name				*g:ku_buffer_name*
 	A string which reporesents the name of the ku buffer.  This value
@@ -596,6 +609,12 @@ g:ku_component_separators			*g:ku_component_separators*
 	|ku-auto-component-completion|.  The default value is '/\:', so if you
 	type '/', '\' or ':', |ku-auto-component-completion| will be
 	activated.
+
+g:ku_history_added_p				*g:ku_history_added_p*
+	A string which reporesents the name of a function which takes an input
+	pattern as a string and returns true if the pattern can be added into
+	the input history or false otherwise.  The default value means
+	non-empty pattern can be added into the input history.
 
 
 
@@ -688,6 +707,22 @@ BUGS						*ku-bugs*
 
 ==============================================================================
 CHANGELOG					*ku-changelog*
+
+0.1.4	2008-09-29T02:31:12+09:00
+	- Add |ku#{source}#acc_valid_p()| to filter items for
+	  |ku-auto-component-completion|.
+	- Add |g:ku_history_added_p|.
+	- Fix an error when input history becomes larger than its maximum
+	  size.
+	- Add a way to disable a specific action.  See |ku-disable-action|.
+	- Set 'filetype' of |the-ku-buffer| to "ku".
+	- Add syntax highlighting for |the-ku-buffer| and messages by
+	  |<Plug>(ku-choose-an-action)|.
+	- Refactor on minor stuffs.
+
+	Incompatible changes:
+	- Don't publish "User plugin-ku-buffer-initialized".
+	  Use "FileType ku" and/or filetype plugin instead.
 
 0.1.3	2008-09-28T03:30:42+09:00
 	- Inconpatible change:

@@ -1,5 +1,5 @@
 " ku - Support to do something
-" Version: 0.1.3
+" Version: 0.1.4
 " Copyright (C) 2008 kana <http://whileimautomaton.net/>
 " License: MIT license  {{{
 "     Permission is hereby granted, free of charge, to any person obtaining
@@ -132,6 +132,11 @@ let s:current_hisotry_index = -1
 " For ku#restart()
 let s:last_used_source = s:INVALID_SOURCE
 let s:last_used_input_pattern = ''
+
+
+if !exists('g:ku_history_added_p')
+  let g:ku_history_added_p = 'ku#_history_added_p'
+endif
 
 
 
@@ -663,8 +668,8 @@ function! s:initialize_ku_buffer()  "{{{2
   " <C-n>/<C-p> ... Vim doesn't expand these keys in Insert mode completion.
 
   " User's initialization.
-  silent doautocmd User plugin-ku-buffer-initialized
-  if !exists('#User#plugin-ku-buffer-initialized')
+  setfiletype ku
+  if !(exists('#FileType#ku') || exists('b:did_ftplugin'))
     call ku#default_key_mappings(s:FALSE)
   endif
 
@@ -875,7 +880,8 @@ function! s:text_by_automatic_component_completion(line)  "{{{3
   "     completion.  If 'usr/share/man/man1/' is found in this way, the
   "     completion text will be 'usr/share/man', because user seems to want to
   "     complete till the component which matches to 'm'.
-  for item in ku#_omnifunc(s:FALSE, a:line[:-2])  " without the last SEP
+  let items = copy(ku#_omnifunc(s:FALSE, a:line[:-2]))  " without the last SEP
+  for item in filter(items, 's:api(s:current_source,"acc_valid_p",v:val,SEP)')
     let item_components = split(item.word, SEP, s:TRUE)
 
     if len(line_components) < 2
@@ -920,25 +926,48 @@ endfunction
 
 " Action-related stuffs  "{{{2
 function! s:choose_action(item)  "{{{3
-  " Composite the 4 key tables on s:current_source for further work.
-  let KEY_TABLE = {}
-  for _ in [s:default_key_table(),
-  \         s:custom_key_table('common'),
-  \         s:api(s:current_source, 'key_table'),
-  \         s:custom_key_table(s:current_source)]
-    call extend(KEY_TABLE, _)
-  endfor
+  " Prompt  Item     Source
+  "    |     |         |
+  "   _^__  _^______  _^__
+  "   Item: Makefile (file)
+  "   ^C cancel      ^O open        ...
+  "   What action?   ~~ ~~~~
+  "   ~~~~~~~~~~~~    |   |
+  "         |         |   |
+  "      Message     Key  Action
+  "
+  " Here "Prompt" is highlighted with kuChoosePrompt,
+  " "Item" is highlighted with kuChooseItem, and so forth.
+  let KEY_TABLE = s:composite_key_table(s:current_source)
   call filter(KEY_TABLE, 'v:val !=# "nop"')
+  let ACTION_TABLE = s:composite_action_table(s:current_source)
+  call filter(KEY_TABLE, 'get(ACTION_TABLE, v:val, "") !=# "nop"')
 
-  echo printf('Item: %s (%s)', a:item.word, s:current_source)
+  " "Item: {item} ({source})"
+  echohl NONE
+  echo ''
+  echohl kuChoosePrompt
+  echon 'Item'
+  echohl NONE
+  echon ': '
+  echohl kuChooseItem
+  echon a:item.word
+  echohl NONE
+  echon ' ('
+  echohl kuChooseSource
+  echon s:current_source
+  echohl NONE
+  echon ')'
 
   " List keys and their actions.
   " FIXME: listing like ls - the width of each column is varied.
-  let FORMAT = '%-2s %s'
+  let KEYS = map(sort(keys(KEY_TABLE)), 'v:val')
+  let KEY_NAMES = map(copy(KEYS), 'strtrans(v:val)')
+  let MAX_KEY_WIDTH = max(map(copy(KEY_NAMES), 'len(v:val)'))
+  let ACTION_NAMES = map(copy(KEYS), 'KEY_TABLE[v:val]')
+  let MAX_ACTION_WIDTH = max(map(copy(ACTION_NAMES), 'len(v:val)'))
+  let MAX_LABEL_WIDTH = MAX_KEY_WIDTH + 1 + MAX_ACTION_WIDTH
   let SPACER = '   '
-  let KEYS = sort(keys(KEY_TABLE))
-  let LL = map(copy(KEYS), 'printf(FORMAT, strtrans(v:val), KEY_TABLE[v:val])')
-  let MAX_LABEL_WIDTH = max(map(copy(LL), 'len(v:val)'))
   let C = (&columns + len(SPACER) - 1) / (MAX_LABEL_WIDTH + len(SPACER))
   let C = max([C, 1])
   " let C = min([8, C])  " experimental
@@ -950,15 +979,24 @@ function! s:choose_action(item)  "{{{3
       if !(i < N)
         continue
       endif
-      if col == 0
-        echo LL[i]
-      else
-        echon SPACER LL[i]
-      endif
-      echon repeat(' ', MAX_LABEL_WIDTH - len(LL[i]))
+
+      " "{key} {action}"
+      echon col == 0 ? "\n" : SPACER
+      echohl kuChooseKey
+      echon KEY_NAMES[i]
+      echohl NONE
+      echon repeat(' ', MAX_KEY_WIDTH - len(KEY_NAMES[i]))
+      echon ' '
+      echohl kuChooseAction
+      echon ACTION_NAMES[i]
+      echohl NONE
+      echon repeat(' ', MAX_ACTION_WIDTH - len(ACTION_NAMES[i]))
     endfor
   endfor
+
+  echohl kuChooseMessage
   echo 'What action?'
+  echohl NONE
 
   " Take user input.
   let k = s:getkey()
@@ -984,19 +1022,23 @@ endfunction
 
 
 function! s:get_action_function(action)  "{{{3
-  for _ in [s:custom_action_table(s:current_source),
-  \         s:api(s:current_source, 'action_table'),
-  \         s:custom_action_table('common'),
-  \         s:default_action_table()]
-    if has_key(_, a:action)
-      return _[a:action]
+  let ACTION_TABLE = s:composite_action_table(s:current_source)
+  if has_key(ACTION_TABLE, a:action)  " exists action?
+    if ACTION_TABLE[a:action] !=# 'nop'  " enabled action?
+      return ACTION_TABLE[a:action]
+    else
+      break
     endif
-  endfor
+  endif
 
-  echoerr printf('No such action for source %s: %s',
-  \              string(s:current_source),
-  \              string(a:action))
-  return s:get_action_function('nop')
+    " To avoid echoing the location of error,
+    " use :echohl ErrorMsg instead of :echoerr.
+  echohl ErrorMsg
+  echo printf('No such action for source %s: %s',
+  \           string(s:current_source),
+  \           string(a:action))
+  echohl NONE
+  return 's:_default_action_nop'
 endfunction
 
 
@@ -1079,6 +1121,18 @@ endfunction
 
 
 " Action table  "{{{2
+function! s:composite_action_table(source)  "{{{3
+  let action_table = {}
+  for _ in [s:default_action_table(),
+  \         s:custom_action_table('common'),
+  \         s:api(a:source, 'action_table'),
+  \         s:custom_action_table(a:source)]
+    call extend(action_table, _)
+  endfor
+  return action_table
+endfunction
+
+
 function! s:custom_action_table(source)  "{{{3
   return get(s:custom_action_tables, a:source, {})
 endfunction
@@ -1110,6 +1164,18 @@ endfunction
 
 
 " Key table  "{{{2
+function! s:composite_key_table(source)  "{{{3
+  let key_table = {}
+  for _ in [s:default_key_table(),
+  \         s:custom_key_table('common'),
+  \         s:api(a:source, 'key_table'),
+  \         s:custom_key_table(a:source)]
+    call extend(key_table, _)
+  endfor
+  return key_table
+endfunction
+
+
 function! s:custom_key_table(source)  "{{{3
   return get(s:custom_key_tables, a:source, {})
 endfunction
@@ -1148,7 +1214,7 @@ endfunction
 function! s:prefix_table_for(source)  "{{{3
   let PREFIX_TABLE = {}
   for _ in [s:custom_prefix_table('common'),
-  \         s:custom_prefix_table(s:current_source)]
+  \         s:custom_prefix_table(a:source)]
     call extend(PREFIX_TABLE, _)
   endfor
   return PREFIX_TABLE
@@ -1197,11 +1263,18 @@ let s:HISTORY_FILE = 'info/ku/history'
 
 
 function! s:history_add(new_input_pattern)  "{{{3
+  if !{g:ku_history_added_p}(a:new_input_pattern)
+    return
+  endif
   call insert(s:inputted_patterns, a:new_input_pattern, 0)
 
   if s:HISTORY_SIZE < len(s:inputted_patterns)
-    call remove(s:inputted_patterns, s:HISTORY_SIZE+1, -1)
+    unlet s:inputted_patterns[(s:HISTORY_SIZE):]
   endif
+endfunction
+
+function! ku#_history_added_p(new_input_pattern)
+  return a:new_input_pattern !~ '^\s*$'
 endfunction
 
 
@@ -1246,11 +1319,17 @@ function! s:api(source_name, api_name, ...)  "{{{2
   let _ = matchstr(a:source_name, '^[a-z]\+\ze-')
 
   if _ == ''  " normal source
-    return call(printf('ku#%s#%s', a:source_name, a:api_name), a:000)
+    let func = printf('ku#%s#%s', a:source_name, a:api_name)
+    let args = a:000
   else  " special source
-    return call(printf('ku#special#%s#%s', _, a:api_name),
-    \           [a:source_name] + a:000)
+    let func = printf('ku#special#%s#%s', _, a:api_name)
+    let args = [a:source_name] + a:000
   endif
+
+  if a:api_name ==# 'acc_valid_p' && !exists('*' . func)
+    return s:TRUE
+  endif
+  return call(func, args)
 endfunction
 
 
