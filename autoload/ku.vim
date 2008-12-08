@@ -1,5 +1,5 @@
 " ku - Support to do something
-" Version: 0.1.5
+" Version: 0.1.6
 " Copyright (C) 2008 kana <http://whileimautomaton.net/>
 " License: MIT license  {{{
 "     Permission is hereby granted, free of charge, to any person obtaining
@@ -149,6 +149,13 @@ endif
 
 
 " Interface  "{{{1
+function! ku#available_source_p(source)  "{{{2
+  return 0 <= index(ku#available_sources(), a:source)
+endfunction
+
+
+
+
 function! ku#available_sources()  "{{{2
   " Assumes that s:available_sources will be never changed during a session.
   if s:ku_active_p() && s:session_id == s:_session_id_source_cache
@@ -341,6 +348,7 @@ function! ku#default_key_mappings(override_p)  "{{{2
   call s:ni_map(_, '<buffer> <C-m>', '<Plug>(ku-do-the-default-action)')
   call s:ni_map(_, '<buffer> <Tab>', '<Plug>(ku-choose-an-action)')
   call s:ni_map(_, '<buffer> <C-i>', '<Plug>(ku-choose-an-action)')
+  call s:ni_map(_, '<buffer> <Esc>i', '<Plug>(ku-do-persistent-action)')
   call s:ni_map(_, '<buffer> <C-j>', '<Plug>(ku-next-source)')
   call s:ni_map(_, '<buffer> <C-k>', '<Plug>(ku-previous-source)')
   call s:ni_map(_, '<buffer> <Esc>l', '<Plug>(ku-history-source)')
@@ -381,16 +389,15 @@ endfunction
 
 
 function! ku#start(source, ...)  "{{{2
-  if !s:available_source_p(a:source)
+  if !ku#available_source_p(a:source)
     echoerr 'ku: Not a valid source name:' string(a:source)
     return s:FALSE
   endif
 
   if s:ku_active_p()
-    " ":Ku {source}" change the current source as a:source if ku is already
-    " active.
-    call s:switch_current_source(a:source)
-    return s:TRUE
+    echoerr 'ku: Already active - called with:'
+    \       string(a:source) 'and' string(a:000)
+    return s:FALSE
   endif
 
   let s:current_source = a:source
@@ -434,6 +441,23 @@ function! ku#start(source, ...)  "{{{2
   call feedkeys('A', 'n')
 
   call s:api(s:current_source, 'event_handler', 'SourceEnter')
+  return s:TRUE
+endfunction
+
+
+
+
+function! ku#switch_source(source)  "{{{2
+  if !s:ku_active_p()
+    echoerr 'ku: Not active - called with:' string(a:source)
+    return s:FALSE
+  endif
+  if !ku#available_source_p(a:source)
+    echoerr 'ku: Unavailable source:' string(a:source)
+    return s:FALSE
+  endif
+
+  call s:switch_current_source(a:source)
   return s:TRUE
 endfunction
 
@@ -622,6 +646,8 @@ function! s:initialize_ku_buffer()  "{{{2
   \        :<C-u>call <SID>do('default')<Return>
   nnoremap <buffer> <silent> <Plug>(ku-choose-an-action)
   \        :<C-u>call <SID>do('')<Return>
+  nnoremap <buffer> <silent> <Plug>(ku-do-persistent-action)
+  \        :<C-u>call <SID>do('persistent')<Return>
   nnoremap <buffer> <silent> <Plug>(ku-next-source)
   \        :<C-u>call <SID>switch_current_source(1)<Return>
   nnoremap <buffer> <silent> <Plug>(ku-previous-source)
@@ -655,6 +681,10 @@ function! s:initialize_ku_buffer()  "{{{2
   \    <Plug>(ku-%-accept-completion)
   \<Plug>(ku-%-leave-insert-mode)
   \<Plug>(ku-choose-an-action)
+  imap <buffer> <silent> <Plug>(ku-do-persistent-action)
+  \    <Plug>(ku-%-accept-completion)
+  \<Plug>(ku-%-leave-insert-mode)
+  \<Plug>(ku-do-persistent-action)
   imap <buffer> <silent> <Plug>(ku-next-source)
   \    <Plug>(ku-%-cancel-completion)
   \<Plug>(ku-%-leave-insert-mode)
@@ -810,7 +840,7 @@ function! s:recall_input_history(delta, change_source_p)  "{{{2
     let _ = ku#input_history()[n].pattern
     if a:change_source_p
       let new_source = ku#input_history()[n].source
-      if s:available_source_p(new_source)
+      if ku#available_source_p(new_source)
         call s:switch_current_source(new_source)
       endif
     endif
@@ -847,7 +877,7 @@ function! s:switch_current_source(new_source)  "{{{2
     if a:new_source ==# '*history*'
       if 0 <= s:current_hisotry_index
         let new_source = ku#input_history()[s:current_hisotry_index].source
-        if !s:available_source_p(new_source)
+        if !ku#available_source_p(new_source)
           return s:FALSE
         endif
       else
@@ -1191,6 +1221,16 @@ function! s:_default_action_nop(item)  "{{{3
 endfunction
 
 
+function! s:_default_action_persistent(item)  "{{{3
+  let action = s:choose_action(a:item)
+  if action !=# 'cancel'
+    call s:do_action(action, a:item)
+    call ku#restart()
+  endif
+  return
+endfunction
+
+
 
 
 " Action table  "{{{2
@@ -1225,6 +1265,7 @@ function! s:default_action_table()  "{{{3
   \   'lcd': 's:_default_action_lcd',
   \   'left': 's:_default_action_left',
   \   'nop': 's:_default_action_nop',
+  \   'persistent': 's:_default_action_persistent',
   \   'right': 's:_default_action_right',
   \   'tab-Left': 's:_default_action_tab_Left',
   \   'tab-Right': 's:_default_action_tab_Right',
@@ -1263,6 +1304,7 @@ function! s:default_key_table()  "{{{3
   \   "\<C-l>": 'right',
   \   "\<C-t>": 'tab-Right',
   \   "\<Esc>": 'cancel',
+  \   "\<Esc>i": 'persistent',
   \   "\<Return>": 'default',
   \   '/': 'cd',
   \   ':': 'ex',
@@ -1343,7 +1385,7 @@ let s:HISTORY_FILE = 'info/ku/history'
 
 
 function! s:history_add(new_input_pattern, source)  "{{{3
-  if !{g:ku_history_added_p}(a:new_input_pattern)
+  if !{g:ku_history_added_p}(a:new_input_pattern, a:source)
     return
   endif
   call insert(s:inputted_patterns,
@@ -1357,8 +1399,8 @@ function! s:history_add(new_input_pattern, source)  "{{{3
   endif
 endfunction
 
-function! ku#_history_added_p(new_input_pattern)
-  return a:new_input_pattern !~ '^\s*$'
+function! ku#_history_added_p(new_input_pattern, source)
+  return a:source !=# 'history' && a:new_input_pattern !~ '^\s*$'
 endfunction
 
 
@@ -1424,13 +1466,6 @@ function! s:api(source_name, api_name, ...)  "{{{2
     return s:TRUE
   endif
   return call(func, args)
-endfunction
-
-
-
-
-function! s:available_source_p(source)  "{{{2
-  return 0 <= index(ku#available_sources(), a:source)
 endfunction
 
 

@@ -1,6 +1,6 @@
 *ku.txt*	Support to do something
 
-Version 0.1.5
+Version 0.1.6
 Script ID: 2337
 Copyright (C) 2008 kana <http://whileimautomaton.net/>
 License: MIT license  {{{
@@ -75,10 +75,9 @@ INTERFACE					*ku-interface*
 COMMANDS					*ku-commands*
 
 :Ku {source}					*:Ku*
-			Start selecting items from {source}.
-
-			If ku is already active, change the current source as
-			{source} directly.
+			Start selecting items from {source}.  It is an error
+			to use this command while ku is active.
+			See also |ku#start()|.
 
 :KuDoAction {name}
 			Do the action named as {name} for the current item.
@@ -97,6 +96,10 @@ ku#restart()					*ku#restart()*
 			Call |ku#start()| with the last used source and the
 			last inputted pattern.
 
+ku#switch_source({source})			*ku#switch_source()*
+			Change the current source to {source}.  This function
+			works only while ku is active.  Otherwise, do nothing.
+
 ku#default_key_mappings({override_p})		*ku#default_key_mappings()*
 			Define the following key mappings which are local to
 			the current buffer in Normal mode and Insert mode.
@@ -110,6 +113,7 @@ ku#default_key_mappings({override_p})		*ku#default_key_mappings()*
 			<C-m>		<Plug>(ku-do-the-default-action)
 			<Tab>		<Plug>(ku-choose-an-action)
 			<C-i>		<Plug>(ku-choose-an-action)
+			<Esc>i		<Plug>(ku-do-persistent-action)
 			<C-j>		<Plug>(ku-next-source)
 			<C-k>		<Plug>(ku-previous-source)
 			<Esc>l		<Plug>(ku-history-source)
@@ -173,6 +177,10 @@ ku#custom_priority({source}, {priority})	*ku#custom_priority()*
 
 			See also |ku-sources-list|.
 
+ku#available_source_p({source})			*ku#available_source_p()*
+			Return true if {source} is a valid one.
+			Otherwise, return false.
+
 ku#available_sources()				*ku#available_sources()*
 			Return a list of strings which represents the names of
 			available sources.
@@ -213,6 +221,10 @@ In the ku window, the following key mappings are defined:
 			Show the mesasge on available actions, take a single
 			key input, then do the appropriate action.  See also
 			|ku-default-action-table| and |ku-default-key-table|.
+
+<Plug>(ku-do-persistent-action)      	    *<Plug>(ku-do-persistent-action)*
+			Like |<Plug>(ku-choose-an-action)|, but execute an
+			action without quitting ku.
 
 <Plug>(ku-next-source)				*<Plug>(ku-next-source)*
 <Plug>(ku-previous-source)			*<Plug>(ku-previous-source)*
@@ -397,6 +409,11 @@ nop						*ku-aciton-nop*
 			Do nothing.  Use this action to remove an entry from
 			a key table.
 
+persistent					*ku-aciton-persistent*
+			 Choose an action the same as
+			 |<Plug>(ku-choose-an-action)|, then execute an action
+			 without quitting ku.
+
 Bottom						*ku-action-Bottom*
 Left						*ku-action-Left*
 Right						*ku-action-Right*
@@ -443,6 +460,7 @@ Key		Action ~
 <C-l>		right		|ku-action-right|
 <C-t>		tab-Right	|ku-action-tab-Right|
 <Esc>		cancel		|ku-action-cancel|
+<Esc>i		persistent	|ku-action-persistent|
 <Return>	default		|ku-action-default|
 ?		lcd		|ku-action-lcd|
 H		Left		|ku-action-Left|
@@ -463,6 +481,7 @@ The following sources are included with the packages of ku:
 
 - buffer	(|ku-buffer.txt|)
 - file		(|ku-file.txt|)
+- history	(|ku-history.txt|)
 
 
 
@@ -654,10 +673,19 @@ g:ku_component_separators			*g:ku_component_separators*
 	activated.
 
 g:ku_history_added_p				*g:ku_history_added_p*
-	A string which reporesents the name of a function which takes an input
-	pattern as a string and returns true if the pattern can be added into
-	the input history or false otherwise.  The default value means
-	non-empty pattern can be added into the input history.
+	A string which reporesents the name of a function.  This function is
+	used to determine whether an input pattern can be added to
+	|ku-input-history| or not.
+
+	This function must take 2 arguments: the 1st argument is an input
+	pattern, and the 2nd argument is the source for which the input
+	pattern was inputted.  If it returns true, the input pattern will be
+	added to the input history.  Otherwise, the input pattern will not be
+	added.
+
+	The default value will not add the following patterns:
+	- Empty patterns, or
+	- Any patterns which were inputted for source |ku-history|.
 
 g:ku_history_size				*g:ku_history_size*
 	A number which is the maximum size of input history.
@@ -754,6 +782,23 @@ BUGS						*ku-bugs*
 
 ==============================================================================
 CHANGELOG					*ku-changelog*
+
+0.1.6	2008-12-08T16:41:47+09:00
+	- Add |ku#switch_source()|.
+	- Add |ku-action-persistent|, |<Plug>(ku-do-persistent-action)| and
+	  the default key mapping for it (see |ku#default_key_mappings()|).
+	- Include new source |ku-history|.
+	- Add |ku#available_source_p()|.
+	- Change the default value of |g:ku_history_added_p|.  Now it also
+	  omits patterns for source |ku-history|.
+
+	Incompatible changes:
+	- Change the behavior of |:Ku| and |ku#start()| if ku is already
+	  active.  Old ones change the current source to the specified source.
+	  New ones don't nothing.  Use |ku#switch_source()| to change the
+	  current source.
+	- Change the specification of |g:ku_history_added_p|.  It took
+	  a single argument, but now, it takes 2 arguments.
 
 0.1.5	2008-10-19T21:32:12+09:00/2008-12-08T01:31:24+09:00
 	- Show the information about |ku-input-history| in |the-ku-buffer|.
